@@ -1,4 +1,4 @@
-name: Quick Tailscale VPS
+name: Termux Ready VPS
 
 on: workflow_dispatch
 
@@ -8,54 +8,48 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Start Tailscale Directly
+    - name: Start Tmate Session
+      uses: mxschmitt/action-tmate@v3
+      with:
+        limit-access-to-actor: false
+        
+    - name: Setup Ubuntu in Background
       run: |
-        echo "🚀 Creating Tailscale session..."
+        # Install Docker untuk Ubuntu container
+        sudo apt-get update
+        sudo apt-get install -y docker.io
         
-        # Install Tailscale
-        curl -fsSL https://tailscale.com/install.sh | sh
+        # Run Ubuntu container
+        sudo docker run -d --name=ubuntu-vps ubuntu:22.04 sleep infinity
         
-        # Start Tailscale dengan exit node
-        sudo tailscale up \
-          --authkey=tskey-auth-knXFQBkQ5521CNTRL-BDXhLbHuJKMfEvULZhbfJMwPjNm7wPxe \
-          --hostname="github-vps-aldo" \
-          --accept-routes \
-          --advertise-exit-node
+        # Setup container
+        sudo docker exec ubuntu-vps bash -c "
+        apt-get update
+        apt-get install -y curl wget sudo
+        useradd -m aldo
+        echo 'aldo:aldo123' | chpasswd
+        "
         
-        echo ""
-        echo "========================================"
-        echo "✅ TAILSCALE VPS READY!"
-        echo "========================================"
-        echo ""
+        echo "✅ Ubuntu container ready"
+        echo "Access via tmate session above"
         
-        # Get Tailscale IP
-        MY_IP=$(tailscale ip --4)
-        echo "📡 Your Tailscale IP: $MY_IP"
-        echo ""
-        echo "🔗 Access this VPS from any device with Tailscale!"
-        echo ""
-        echo "💻 SSH into this VPS from another device:"
-        echo "   ssh ubuntu@github-vps-aldo"
-        echo "   or"
-        echo "   ssh ubuntu@$MY_IP"
-        echo ""
-        echo "🔧 This VPS can be used as:"
-        echo "   • SSH jump host"
-        echo "   • Exit node (VPN)"
-        echo "   • Development server"
-        echo ""
-        echo "⏰ Will run for 6 hours"
-        echo "========================================"
-        
-    - name: Keep Session Alive
+    - name: Display Instructions
       run: |
-        echo "🔄 Keeping VPS alive..."
-        
-        # Display status periodically
-        while true; do
-          echo "[$(date)] VPS Status:"
-          echo "IP: $(tailscale ip --4 2>/dev/null || echo 'Getting IP...')"
-          echo "Devices in network: $(tailscale status 2>/dev/null | grep -c '^100' || echo '0')"
-          echo "---"
-          sleep 60
-        done
+        echo ""
+        echo "========================================"
+        echo "📱 HOW TO ACCESS FROM TERMUX:"
+        echo "========================================"
+        echo ""
+        echo "1. 📲 Open tmate link in browser"
+        echo "2. 🔗 Copy the SSH command"
+        echo "3. 📱 Paste in Termux"
+        echo ""
+        echo "🔧 ONCE CONNECTED:"
+        echo "   Access Ubuntu container:"
+        echo "   sudo docker exec -it ubuntu-vps bash"
+        echo ""
+        echo "   Login as aldo in container:"
+        echo "   sudo docker exec -it ubuntu-vps su - aldo"
+        echo "   Password: aldo123"
+        echo ""
+        echo "========================================"
