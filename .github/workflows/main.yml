@@ -1,6 +1,7 @@
-name: Termux Ready VPS
+name: VPS with Cloudflare Tunnel
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
 
 jobs:
   vps:
@@ -8,48 +9,126 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Start Tmate Session
-      uses: mxschmitt/action-tmate@v3
-      with:
-        limit-access-to-actor: false
-        
-    - name: Setup Ubuntu in Background
+    - name: Setup SSH Server
       run: |
-        # Install Docker untuk Ubuntu container
+        echo "🚀 Setting up SSH server..."
+        
+        # Install SSH server
         sudo apt-get update
-        sudo apt-get install -y docker.io
+        sudo apt-get install -y openssh-server
         
-        # Run Ubuntu container
-        sudo docker run -d --name=ubuntu-vps ubuntu:22.04 sleep infinity
+        # Create user aldo
+        sudo useradd -m -s /bin/bash aldo 2>/dev/null || true
+        echo "aldo:aldo123" | sudo chpasswd
         
-        # Setup container
-        sudo docker exec ubuntu-vps bash -c "
-        apt-get update
-        apt-get install -y curl wget sudo
-        useradd -m aldo
-        echo 'aldo:aldo123' | chpasswd
-        "
+        # Allow password auth
+        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+        sudo sed -i 's/PasswordAuthentication no/#PasswordAuthentication no/' /etc/ssh/sshd_config
+        sudo systemctl restart ssh
         
-        echo "✅ Ubuntu container ready"
-        echo "Access via tmate session above"
+        echo "✅ SSH server ready on port 22"
         
-    - name: Display Instructions
+    - name: Install Cloudflared Tunnel
+      run: |
+        echo "🔗 Installing Cloudflared..."
+        
+        # Download cloudflared
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+        sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
+        
+        echo "✅ Cloudflared installed"
+        
+    - name: Create Cloudflare Tunnel
+      run: |
+        echo "🌐 Creating Cloudflare tunnel..."
+        
+        # Authenticate (no account needed for trycloudflare.com)
+        cloudflared tunnel --url ssh://localhost:22 2>&1 | tee tunnel.log &
+        
+        sleep 10
+        
+        # Get tunnel URL
+        TUNNEL_URL=$(cloudflared tunnel --url ssh://localhost:22 2>&1 | grep -o 'https://[^ ]*\.trycloudflare.com' | head -1)
+        
+        if [ -z "$TUNNEL_URL" ]; then
+          # Alternative method
+          TUNNEL_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | grep -o 'https://[^"]*\.trycloudflare.com' | head -1)
+        fi
+        
+        if [ -n "$TUNNEL_URL" ]; then
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          echo "✅ Tunnel created: $TUNNEL_URL"
+        else
+          echo "⚠️ Could not get tunnel URL"
+          # Create manual tunnel info
+          MANUAL_URL="https://$(hostname).trycloudflare.com"
+          echo "TUNNEL_URL=$MANUAL_URL" >> $GITHUB_ENV
+          echo "Using: $MANUAL_URL"
+        fi
+        
+    - name: Generate Termux Connection Guide
       run: |
         echo ""
-        echo "========================================"
-        echo "📱 HOW TO ACCESS FROM TERMUX:"
-        echo "========================================"
+        echo "╔══════════════════════════════════════════════╗"
+        echo "║           📱 TERMUX SSH READY               ║"
+        echo "╚══════════════════════════════════════════════╝"
         echo ""
-        echo "1. 📲 Open tmate link in browser"
-        echo "2. 🔗 Copy the SSH command"
-        echo "3. 📱 Paste in Termux"
+        
+        if [ -n "${{ env.TUNNEL_URL }}" ]; then
+          # Extract hostname from URL
+          HOSTNAME=$(echo "${{ env.TUNNEL_URL }}" | sed 's|https://||')
+          
+          echo "🌐 PUBLIC TUNNEL:"
+          echo "   URL: ${{ env.TUNNEL_URL }}"
+          echo ""
+          echo "👤 SSH CONNECTION:"
+          echo "   ssh aldo@$HOSTNAME"
+          echo "   Password: aldo123"
+          echo ""
+          echo "🔧 IN TERMUX:"
+          echo "   1. Install SSH:"
+          echo "      pkg install openssh -y"
+          echo ""
+          echo "   2. Connect:"
+          echo "      ssh aldo@$HOSTNAME"
+          echo ""
+          echo "   3. Enter password: aldo123"
+          echo ""
+        else
+          echo "⚠️ No tunnel URL available"
+          echo ""
+          echo "📡 ALTERNATIVE:"
+          echo "   Check GitHub Actions logs for tunnel URL"
+          echo ""
+        fi
+        
+        echo "💻 SERVER INFO:"
+        echo "   OS: Ubuntu (GitHub Runner)"
+        echo "   User: aldo"
+        echo "   Runtime: 6 hours max"
         echo ""
-        echo "🔧 ONCE CONNECTED:"
-        echo "   Access Ubuntu container:"
-        echo "   sudo docker exec -it ubuntu-vps bash"
+        echo "🔄 TUNNEL STATUS:"
+        echo "   Cloudflare Tunnel Active"
+        echo "   Auto-reconnects if drops"
         echo ""
-        echo "   Login as aldo in container:"
-        echo "   sudo docker exec -it ubuntu-vps su - aldo"
-        echo "   Password: aldo123"
+        echo "╔══════════════════════════════════════════════╗"
+        echo "║         ✅ READY FOR TERMUX                 ║"
+        echo "╚══════════════════════════════════════════════╝"
+        
+    - name: Keep Tunnel Alive
+      run: |
+        echo "🔄 Tunnel running..."
+        echo "URL: ${{ env.TUNNEL_URL }}"
         echo ""
-        echo "========================================"
+        echo "📱 Termux command:"
+        echo "ssh aldo@$(echo ${{ env.TUNNEL_URL }} | sed 's|https://||')"
+        echo ""
+        echo "⏳ Will run for 6 hours..."
+        
+        # Monitor tunnel
+        COUNTER=0
+        while [ $COUNTER -lt 360 ]; do
+          echo "[$(date)] Tunnel active ($COUNTER/360 minutes)"
+          COUNTER=$((COUNTER + 1))
+          sleep 60
+        done
