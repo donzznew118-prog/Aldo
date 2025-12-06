@@ -1,18 +1,11 @@
-name: Max Spec with Docker
+name: Fast Tmate
 
 on: workflow_dispatch
 
 jobs:
-  vps:
-    runs-on: ubuntu-latest-16core
+  shell:
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
-    - name: Install Docker
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y docker.io
-        sudo docker run hello-world
-        
-    - name: Start Tmate
-      uses: mxschmitt/action-tmate@v3
+    - uses: mxschmitt/action-tmate@v3
