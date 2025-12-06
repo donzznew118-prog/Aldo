@@ -1,0 +1,15 @@
+name: No Warning Tmate
+
+on: workflow_dispatch
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Start Tmate (No SSH Check)
+      uses: mxschmitt/action-tmate@v3
+      with:
+        limit-access-to-actor: false
+        ssh-publ
