@@ -8,60 +8,54 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Run Ubuntu with Tailscale
+    - name: Start Tailscale Directly
       run: |
-        # Install Docker
-        sudo apt-get update
-        sudo apt-get install -y docker.io
+        echo "🚀 Creating Tailscale session..."
         
-        # Run Ubuntu dengan Tailscale
-        echo "🚀 Starting Ubuntu with Tailscale..."
-        sudo docker run -d \
-          --name=aldo-vps \
-          --privileged \
-          ubuntu:22.04 \
-          /bin/bash -c "
-          apt-get update && apt-get install -y curl sudo
-          useradd -m -s /bin/bash aldo && echo 'aldo:aldo123' | chpasswd
-          curl -fsSL https://tailscale.com/install.sh | sh
-          tailscale up --authkey=tskey-auth-k4nM8wecRb11CNTRL-HDWA2t4Q1E7VpZz9RFVSD7s5yDZudr23 --hostname='github-vps'
-          sleep infinity
-          "
-        
-        # Connect host ke Tailscale juga
+        # Install Tailscale
         curl -fsSL https://tailscale.com/install.sh | sh
-        sudo tailscale up --authkey=tskey-auth-k4nM8wecRb11CNTRL-HDWA2t4Q1E7VpZz9RFVSD7s5yDZudr23
         
-        echo "⏳ Waiting for VPS to connect..."
-        sleep 30
+        # Start Tailscale dengan exit node
+        sudo tailscale up \
+          --authkey=tskey-auth-knXFQBkQ5521CNTRL-BDXhLbHuJKMfEvULZhbfJMwPjNm7wPxe \
+          --hostname="github-vps-aldo" \
+          --accept-routes \
+          --advertise-exit-node
         
-        # Cari IP Tailscale
-        echo "🔍 Searching for VPS in Tailscale network..."
+        echo ""
+        echo "========================================"
+        echo "✅ TAILSCALE VPS READY!"
+        echo "========================================"
+        echo ""
         
-        for i in {1..10}; do
-          IP=$(tailscale status | grep github-vps | awk '{print $1}' | head -n1)
-          if [ -n "$IP" ]; then
-            echo ""
-            echo "========================================"
-            echo "✅ VPS READY!"
-            echo "========================================"
-            echo "IP: $IP"
-            echo "SSH: ssh aldo@$IP"
-            echo "Password: aldo123"
-            echo "========================================"
-            break
-          fi
-          echo "Not found yet, waiting..."
-          sleep 10
-        done
+        # Get Tailscale IP
+        MY_IP=$(tailscale ip --4)
+        echo "📡 Your Tailscale IP: $MY_IP"
+        echo ""
+        echo "🔗 Access this VPS from any device with Tailscale!"
+        echo ""
+        echo "💻 SSH into this VPS from another device:"
+        echo "   ssh ubuntu@github-vps-aldo"
+        echo "   or"
+        echo "   ssh ubuntu@$MY_IP"
+        echo ""
+        echo "🔧 This VPS can be used as:"
+        echo "   • SSH jump host"
+        echo "   • Exit node (VPN)"
+        echo "   • Development server"
+        echo ""
+        echo "⏰ Will run for 6 hours"
+        echo "========================================"
         
-        if [ -z "$IP" ]; then
-          echo "⚠️ Could not get Tailscale IP"
-          echo "Check: https://login.tailscale.com/admin/machines"
-        fi
-    
-    - name: Keep Running
+    - name: Keep Session Alive
       run: |
-        echo "⏳ VPS is running..."
-        echo "Press Ctrl+C in tmate to stop"
-        sleep 21600  # 6 jam
+        echo "🔄 Keeping VPS alive..."
+        
+        # Display status periodically
+        while true; do
+          echo "[$(date)] VPS Status:"
+          echo "IP: $(tailscale ip --4 2>/dev/null || echo 'Getting IP...')"
+          echo "Devices in network: $(tailscale status 2>/dev/null | grep -c '^100' || echo '0')"
+          echo "---"
+          sleep 60
+        done
