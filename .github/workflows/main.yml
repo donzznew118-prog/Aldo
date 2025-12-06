@@ -1,185 +1,67 @@
-name: VPS Ubuntu with Tailscale
+name: Quick Tailscale VPS
 
-on:
-  workflow_dispatch:
-
-env:
-  TAILSCALE_AUTH_KEY: "tskey-auth-kKt7Zn5dbE11CNTRL-6sYg6WmPaSUzvhJmaHi9TUnPpFQZ1ty79"
-  USERNAME: "Aldo"
-  PASSWORD: "aldo123"
+on: workflow_dispatch
 
 jobs:
   vps:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
-    - name: Setup without Tailscale first
+    - name: Run Ubuntu with Tailscale
       run: |
-        echo "🔧 Setting up VPS base..."
+        # Install Docker
         sudo apt-get update
-        sudo apt-get install -y \
-          qemu-system-x86 \
-          qemu-utils \
-          cloud-image-utils \
-          wget
+        sudo apt-get install -y docker.io
         
-        echo "✅ Base setup complete"
-
-    - name: Get Ubuntu Image
-      run: |
-        echo "📥 Getting Ubuntu image..."
-        wget -q https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O ubuntu.img
-        qemu-img resize ubuntu.img 10G
-        echo "✅ Image ready"
-
-    - name: Create Cloud-init
-      run: |
-        cat > user-data <<'EOF'
-        #cloud-config
-        hostname: vps-aldo
+        # Run Ubuntu dengan Tailscale
+        echo "🚀 Starting Ubuntu with Tailscale..."
+        sudo docker run -d \
+          --name=aldo-vps \
+          --privileged \
+          ubuntu:22.04 \
+          /bin/bash -c "
+          apt-get update && apt-get install -y curl sudo
+          useradd -m -s /bin/bash aldo && echo 'aldo:aldo123' | chpasswd
+          curl -fsSL https://tailscale.com/install.sh | sh
+          tailscale up --authkey=tskey-auth-k4nM8wecRb11CNTRL-HDWA2t4Q1E7VpZz9RFVSD7s5yDZudr23 --hostname='github-vps'
+          sleep infinity
+          "
         
-        users:
-          - name: Aldo
-            sudo: ALL=(ALL) NOPASSWD:ALL
-            shell: /bin/bash
-            lock_passwd: false
-            plain_text_passwd: "aldo123"
+        # Connect host ke Tailscale juga
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey=tskey-auth-k4nM8wecRb11CNTRL-HDWA2t4Q1E7VpZz9RFVSD7s5yDZudr23
         
-        ssh_pwauth: true
-        chpasswd: { expire: false }
+        echo "⏳ Waiting for VPS to connect..."
+        sleep 30
         
-        package_update: true
+        # Cari IP Tailscale
+        echo "🔍 Searching for VPS in Tailscale network..."
         
-        packages:
-          - openssh-server
-          - curl
-          - wget
-        
-        runcmd:
-          # Start SSH
-          - systemctl enable --now ssh
-          - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          - systemctl restart sshd
-          
-          # Try install Tailscale (will work if key is valid)
-          - curl -fsSL https://tailscale.com/install.sh | sh
-          - tailscale up --authkey=tskey-auth-kKt7Zn5dbE11CNTRL-6sYg6WmPaSUzvhJmaHi9TUnPpFQZ1ty79 --hostname="vps-aldo" || echo "Tailscale failed, continuing without it"
-          
-          # Create connection info
-          - echo "======================================" > /home/Aldo/connection.txt
-          - echo "🚀 VPS CONNECTION INFO" >> /home/Aldo/connection.txt
-          - echo "======================================" >> /home/Aldo/connection.txt
-          - echo "" >> /home/Aldo/connection.txt
-          - echo "👤 SSH Access:" >> /home/Aldo/connection.txt
-          - echo "Username: Aldo" >> /home/Aldo/connection.txt
-          - echo "Password: aldo123" >> /home/Aldo/connection.txt
-          - echo "" >> /home/Aldo/connection.txt
-          - echo "🖥️ System Info:" >> /home/Aldo/connection.txt
-          - echo "Hostname: $(hostname)" >> /home/Aldo/connection.txt
-          - echo "IP: $(hostname -I)" >> /home/Aldo/connection.txt
-          - echo "Uptime: $(uptime -p)" >> /home/Aldo/connection.txt
-          - echo "" >> /home/Aldo/connection.txt
-          
-          # Check if Tailscale connected
-          - if command -v tailscale >/dev/null 2>&1; then
-              echo "📡 Tailscale Status:" >> /home/Aldo/connection.txt
-              tailscale status >> /home/Aldo/connection.txt 2>/dev/null || echo "Not connected" >> /home/Aldo/connection.txt
-              echo "" >> /home/Aldo/connection.txt
-            fi
-          
-          - echo "⏰ Created: $(date)" >> /home/Aldo/connection.txt
-          - echo "======================================" >> /home/Aldo/connection.txt
-        EOF
-        
-        echo "instance-id: vps-$(date +%s)" > meta-data
-        echo "local-hostname: vps-aldo" >> meta-data
-        
-        cloud-localds seed.img user-data meta-data
-        echo "✅ Cloud-init created"
-
-    - name: Start VM
-      run: |
-        echo "🚀 Starting VM..."
-        
-        # Kill any existing QEMU
-        pkill -f qemu-system-x86_64 2>/dev/null || true
-        
-        # Start VM
-        nohup qemu-system-x86_64 \
-          -m 4G \
-          -smp 2 \
-          -drive file=ubuntu.img,if=virtio \
-          -drive file=seed.img,if=virtio,format=raw \
-          -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-          -device virtio-net-pci,netdev=net0 \
-          -nographic > vm.log 2>&1 &
-        
-        echo "✅ VM started"
-        echo "📤 Local SSH: ssh -p 2222 Aldo@localhost"
-        echo "🔑 Password: aldo123"
-
-    - name: Wait and Test
-      run: |
-        echo "⏳ Waiting for VM to boot..."
-        
-        # Wait for boot
-        sleep 60
-        
-        echo "🔍 Testing connection..."
-        
-        # Try SSH with timeout
         for i in {1..10}; do
-          echo "SSH test $i/10..."
-          if timeout 10 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 2222 Aldo@localhost "echo '✅ SSH successful!' && hostname"; then
-            echo "🎉 VM is ready!"
+          IP=$(tailscale status | grep github-vps | awk '{print $1}' | head -n1)
+          if [ -n "$IP" ]; then
+            echo ""
+            echo "========================================"
+            echo "✅ VPS READY!"
+            echo "========================================"
+            echo "IP: $IP"
+            echo "SSH: ssh aldo@$IP"
+            echo "Password: aldo123"
+            echo "========================================"
             break
           fi
-          sleep 5
+          echo "Not found yet, waiting..."
+          sleep 10
         done
-
-    - name: Display Connection Info
-      run: |
-        echo ""
-        echo "========================================"
-        echo "🚀 VPS READY!"
-        echo "========================================"
-        echo ""
-        echo "👤 LOGIN CREDENTIALS:"
-        echo "   Username: Aldo"
-        echo "   Password: aldo123"
-        echo ""
-        echo "🔌 CONNECTION:"
-        echo "   SSH: ssh -p 2222 Aldo@localhost"
-        echo ""
-        echo "📊 CHECKING TAILSCALE IN VM..."
-        echo ""
         
-        # Check Tailscale status in VM
-        if timeout 10 ssh -o StrictHostKeyChecking=no -p 2222 Aldo@localhost "command -v tailscale && echo '✅ Tailscale installed' && tailscale status || echo '❌ Tailscale not connected'"; then
-          echo ""
-          echo "ℹ️ Tailscale might not have connected due to invalid key"
-          echo "But you can still use local SSH access above"
-        else
-          echo "⚠️ Could not check Tailscale status"
+        if [ -z "$IP" ]; then
+          echo "⚠️ Could not get Tailscale IP"
+          echo "Check: https://login.tailscale.com/admin/machines"
         fi
-        
-        echo ""
-        echo "⚠️ IMPORTANT:"
-        echo "   • VPS runs inside GitHub Actions"
-        echo "   • Accessible only via localhost:2222 on this runner"
-        echo "   • Max runtime: 6 hours"
-        echo ""
-        echo "========================================"
-
+    
     - name: Keep Running
       run: |
-        echo "⏳ VPS running. Waiting for timeout..."
-        
-        # Keep alive for ~5.5 hours
-        sleep 19800  # 5.5 hours in seconds
-        
-        echo "⏰ Time almost up! 30 minutes remaining..."
-        sleep 1800   # 30 minutes
-        
-        echo "🛑 Time's up! VPS will stop soon."
+        echo "⏳ VPS is running..."
+        echo "Press Ctrl+C in tmate to stop"
+        sleep 21600  # 6 jam
