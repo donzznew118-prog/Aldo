@@ -1,4 +1,4 @@
-name: Simple Max Spec (16GB/8CPU/32GB)
+name: Max Spec with Docker
 
 on: workflow_dispatch
 
@@ -8,7 +8,11 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Start Tmate with Max Spec
+    - name: Install Docker
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y docker.io
+        sudo docker run hello-world
+        
+    - name: Start Tmate
       uses: mxschmitt/action-tmate@v3
-      with:
-        limit-access-to-actor: false
