@@ -1,0 +1,222 @@
+name: VPS Ubuntu with Tailscale IP
+
+on:
+  workflow_dispatch:
+
+env:
+  TAILSCALE_AUTH_KEY: "tskey-auth-kwtebLgxr921CNTRL-W3CChdzC9vQ4uZbn2YKauQcMhrjMh6gvc"
+  USERNAME: "Aldo"
+  PASSWORD: "aldo123"
+
+jobs:
+  vps:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    
+    steps:
+    - name: Setup Tailscale on Host First
+      run: |
+        echo "🔗 Installing Tailscale..."
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey=${{ env.TAILSCALE_AUTH_KEY }} --hostname="github-runner-$(date +%s)"
+        
+        echo "✅ Host connected to Tailscale"
+        echo "Host Tailscale IP:"
+        tailscale ip --4
+
+    - name: Install QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          qemu-system-x86 \
+          qemu-utils \
+          cloud-image-utils \
+          wget
+        
+        echo "✅ QEMU installed"
+
+    - name: Get Ubuntu Image
+      run: |
+        echo "📦 Getting Ubuntu 22.04 image..."
+        wget -q https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O ubuntu.img
+        qemu-img resize ubuntu.img 10G
+        echo "✅ Image ready"
+
+    - name: Create Cloud-init for Aldo
+      run: |
+        cat > user-data <<EOF
+        #cloud-config
+        hostname: vps-aldo
+        
+        users:
+          - name: ${{ env.USERNAME }}
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            lock_passwd: false
+            plain_text_passwd: "${{ env.PASSWORD }}"
+        
+        ssh_pwauth: true
+        chpasswd: { expire: false }
+        
+        package_update: true
+        
+        packages:
+          - openssh-server
+          - curl
+          - wget
+        
+        runcmd:
+          # Start SSH
+          - systemctl enable --now ssh
+          - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          - systemctl restart sshd
+          
+          # Install Tailscale
+          - curl -fsSL https://tailscale.com/install.sh | sh
+          - tailscale up --authkey=${{ env.TAILSCALE_AUTH_KEY }} --hostname="vps-aldo-ubuntu"
+          
+          # Create info file
+          - echo "======================================" > /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "🚀 VPS INFORMATION" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "======================================" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "👤 Username: ${{ env.USERNAME }}" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "🔑 Password: ${{ env.PASSWORD }}" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "🖥️ Hostname: \$(hostname)" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "📡 Tailscale IP: \$(tailscale ip --4 2>/dev/null || echo 'Connecting...')" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "💾 Disk: \$(df -h / | tail -1)" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "🧠 Memory: \$(free -h | grep Mem | awk '{print \$2}')" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "🔗 Connect via:" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "ssh ${{ env.USERNAME }}@\$(tailscale ip --4)" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "⏰ Created: \$(date)" >> /home/${{ env.USERNAME }}/vps-info.txt
+          - echo "======================================" >> /home/${{ env.USERNAME }}/vps-info.txt
+          
+          chown ${{ env.USERNAME }}:${{ env.USERNAME }} /home/${{ env.USERNAME }}/vps-info.txt
+        EOF
+        
+        echo "instance-id: vps-aldo-$(date +%s)" > meta-data
+        echo "local-hostname: vps-aldo" >> meta-data
+        
+        cloud-localds seed.img user-data meta-data
+        echo "✅ Cloud-init created"
+
+    - name: Start VM
+      run: |
+        echo "🚀 Starting Ubuntu VM..."
+        
+        # Start VM
+        nohup qemu-system-x86_64 \
+          -m 4G \
+          -smp 2 \
+          -drive file=ubuntu.img,if=virtio \
+          -drive file=seed.img,if=virtio,format=raw \
+          -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+          -device virtio-net-pci,netdev=net0 \
+          -nographic > /dev/null 2>&1 &
+        
+        VM_PID=$!
+        echo "VM_PID=$VM_PID" >> $GITHUB_ENV
+        echo "✅ VM started (PID: $VM_PID)"
+        echo "📤 SSH available at: localhost:2222"
+
+    - name: Wait for VM Boot
+      run: |
+        echo "⏳ Waiting for VM to boot (90 seconds)..."
+        sleep 90
+        
+        echo "🔍 Checking VM status..."
+        
+        # Try SSH to check if VM is up
+        if timeout 30 sshpass -p '${{ env.PASSWORD }}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 2222 ${{ env.USERNAME }}@localhost "echo '✅ VM is ready!'"; then
+          echo "🎉 VM booted successfully!"
+        else
+          echo "⚠️ SSH test failed, VM might still be booting"
+        fi
+
+    - name: Get Tailscale IP from VM
+      run: |
+        echo "📡 Getting Tailscale IP from VM..."
+        
+        # Wait a bit more for Tailscale to connect
+        sleep 30
+        
+        # Try to get Tailscale IP from VM
+        for i in {1..10}; do
+          echo "Attempt $i/10 to get Tailscale IP..."
+          
+          TAILSCALE_IP=$(timeout 20 sshpass -p '${{ env.PASSWORD }}' ssh -o StrictHostKeyChecking=no -p 2222 ${{ env.USERNAME }}@localhost "tailscale ip --4 2>/dev/null" || echo "")
+          
+          if [ -n "$TAILSCALE_IP" ] && [ "$TAILSCALE_IP" != "failed" ]; then
+            echo "✅ Got Tailscale IP: $TAILSCALE_IP"
+            echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+            break
+          fi
+          
+          sleep 10
+        done
+        
+        if [ -z "$TAILSCALE_IP" ]; then
+          echo "⚠️ Could not get Tailscale IP from VM"
+          echo "Checking host Tailscale network..."
+          
+          # Check if VM appears in host's Tailscale network
+          VM_IN_NETWORK=$(tailscale status | grep "vps-aldo" || echo "")
+          if [ -n "$VM_IN_NETWORK" ]; then
+            HOST_TAILSCALE_IP=$(echo "$VM_IN_NETWORK" | awk '{print $1}')
+            echo "Found VM in network with IP: $HOST_TAILSCALE_IP"
+            echo "TAILSCALE_IP=$HOST_TAILSCALE_IP" >> $GITHUB_ENV
+          fi
+        fi
+
+    - name: Display Connection Info
+      run: |
+        echo ""
+        echo "================================================"
+        echo "🚀 VPS READY - TAILSCALE CONNECTION"
+        echo "================================================"
+        echo ""
+        echo "👤 CREDENTIALS:"
+        echo "   Username: ${{ env.USERNAME }}"
+        echo "   Password: ${{ env.PASSWORD }}"
+        echo ""
+        
+        if [ -n "${{ env.TAILSCALE_IP }}" ]; then
+          echo "🔗 TAILSCALE ACCESS:"
+          echo "   IP Address: ${{ env.TAILSCALE_IP }}"
+          echo "   SSH Command: ssh ${{ env.USERNAME }}@${{ env.TAILSCALE_IP }}"
+          echo "   Hostname: vps-aldo-ubuntu"
+          echo ""
+        fi
+        
+        echo "🖥️ LOCAL ACCESS (GitHub Runner Only):"
+        echo "   SSH: ssh -p 2222 ${{ env.USERNAME }}@localhost"
+        echo ""
+        
+        echo "📊 TAILSCALE STATUS:"
+        echo "   Check devices: tailscale status"
+        echo "   Web admin: https://login.tailscale.com/admin/machines"
+        echo ""
+        
+        echo "⚠️ IMPORTANT:"
+        echo "   • VPS will run for 6 hours max"
+        echo "   • Install Tailscale on your device to connect"
+        echo "   • Use the IP above to SSH from anywhere"
+        echo ""
+        echo "================================================"
+
+    - name: Keep VM Running
+      run: |
+        echo "⏳ VM is running..."
+        echo "To stop VM manually: kill ${{ env.VM_PID }}"
+        echo ""
+        echo "Waiting for timeout or manual stop..."
+        
+        # Keep checking if VM is still running
+        while ps -p ${{ env.VM_PID }} > /dev/null; do
+          sleep 60
+          echo "[$(date)] VM still running..."
+        done
+        
+        echo "❌ VM stopped"
