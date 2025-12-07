@@ -1,0 +1,14 @@
+name: SSHX Instant
+
+on: workflow_dispatch
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Run sshx.io langsung
+      run: |
+        # Download dan run sshx
+        curl -sSf https://sshx.io/get | sh -s -- run
